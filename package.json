@@ -1,0 +1,20 @@
+{
+  "name": "kodems",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm -w apps/api run start:dev",
+    "dev:web": "npm -w apps/web run dev",
+    "build": "npm -w apps/api run build && npm -w apps/web run build",
+    "lint": "npm -w apps/api run lint && npm -w apps/web run lint",
+    "typecheck": "npm -w apps/api run typecheck && npm -w apps/web run typecheck",
+    "test": "npm -w apps/api run test && npm -w apps/web run test",
+    "db:migrate": "npm -w apps/api run db:migrate",
+    "db:seed": "npm -w apps/api run db:seed",
+    "services:start": "./scripts-start-services.sh",
+    "docs": "npm -w apps/api run db:erd && npm -w apps/api run docs:api"
+  }
+}

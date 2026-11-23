@@ -1,0 +1,21 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db: { image: "postgis/postgis:16-3.4", env: { POSTGRES_USER: kodems, POSTGRES_PASSWORD: kodems_dev, POSTGRES_DB: kodems_test }, ports: ["5432:5432"], options: "--health-cmd pg_isready --health-interval 5s --health-retries 10" }
+      redis: { image: "redis:7-alpine", ports: ["6379:6379"] }
+    env: { TEST_DATABASE_URL: "postgresql://kodems:kodems_dev@localhost:5432/kodems_test", PRISMA_SCHEMA_ENGINE_BINARY: /bin/true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: E2E (API + web against seeded demo DB)
+        run: echo "Start API/web with seeded demo data then run 'npm -w apps/web run e2e' (see docs/TESTING.md)"

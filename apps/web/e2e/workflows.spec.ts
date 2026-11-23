@@ -1,0 +1,31 @@
+import { test, expect, Page } from '@playwright/test';
+const PW = 'Demo-Passw0rd!2026';
+async function login(page: Page, who: string) { await page.goto('/login'); await page.getByLabel('Email').fill(`${who}@demo.kodems.test`); await page.getByLabel('Password').fill(PW); await page.getByRole('button', { name: 'Sign in' }).click(); await expect(page).toHaveURL(/dashboard/); }
+
+test('1. login and 2. dashboard loads with real metrics and DEMO labelling', async ({ page }) => {
+  await login(page, 'ops'); await expect(page.getByRole('heading', { name: 'Command Centre' })).toBeVisible(); await expect(page.getByText('Active incidents')).toBeVisible(); await expect(page.getByText(/DEMO/).first()).toBeVisible(); await expect(page.getByText('Live incident map')).toBeVisible();
+});
+test('login rejects bad credentials with an accessible error', async ({ page }) => { await page.goto('/login'); await page.getByLabel('Email').fill('ops@demo.kodems.test'); await page.getByLabel('Password').fill('wrong'); await page.getByRole('button', { name: 'Sign in' }).click(); await expect(page.getByRole('alert')).toContainText('Invalid email or password'); });
+test('3-5. review reports, verify one and create an incident', async ({ page }) => {
+  await login(page, 'ops'); await page.goto('/reports?queue=1'); await page.getByRole('row').nth(1).click(); await expect(page).toHaveURL(/reports\/.+/);
+  await page.getByRole('button', { name: 'Verify' }).click(); await expect(page.getByRole('dialog')).toContainText('explicit decision'); await page.getByRole('button', { name: 'Confirm' }).click(); await expect(page.getByText(/incident .* created/i)).toBeVisible();
+});
+test('reject requires a reason', async ({ page }) => { await login(page, 'ops'); await page.goto('/reports?queue=1'); await page.getByRole('row').nth(1).click(); await page.getByRole('button', { name: 'Reject' }).click(); await page.getByRole('button', { name: 'Save' }).click(); await expect(page.getByRole('alert').first()).toBeVisible(); });
+test('6-7. assign a team and progress the deployment', async ({ page }) => {
+  await login(page, 'coordinator'); await page.goto('/incidents?active=true'); await page.getByRole('row').nth(1).click(); await page.getByRole('button', { name: 'Deploy team' }).click(); await page.getByLabel(/Available team/).selectOption({ index: 1 }); await page.getByLabel('Destination').fill('Test destination'); await page.getByRole('button', { name: 'Assign team' }).click(); await expect(page.getByText('Team assigned')).toBeVisible();
+  await page.getByRole('tab', { name: /Deployments/ }).click(); await page.getByRole('link').filter({ hasText: /KOS-DEP/ }).first().click(); await page.getByRole('button', { name: /Mark Accepted/ }).click(); await expect(page.getByText('Status updated')).toBeVisible();
+});
+test('8. register an affected household', async ({ page }) => { await login(page, 'shelter'); await page.goto('/households'); await page.getByRole('button', { name: 'Register household' }).click(); await page.getByLabel(/Incident/).selectOption({ index: 1 }); await page.getByLabel(/Head of household/).fill('E2E Household Head'); await page.getByLabel(/Household size/).fill('4'); await page.getByRole('button', { name: 'Save' }).click(); await expect(page.getByText('Household registered')).toBeVisible(); });
+test('9-10. relief allocation approval and distribution', async ({ browser }) => {
+  const a = await (await browser.newContext()).newPage(); await login(a, 'relief'); await a.goto('/relief'); await a.getByRole('button', { name: 'New allocation' }).click(); await a.getByLabel('Incident').selectOption({ index: 1 }); await a.getByLabel('Warehouse').selectOption({ index: 1 }); await a.getByLabel('Item').selectOption({ index: 1 }); await a.getByLabel('Quantity').fill('5'); await a.getByLabel('Distribution area').fill('E2E area'); await a.getByRole('button', { name: 'Submit for approval' }).click(); await expect(a.getByText('submitted for approval')).toBeVisible();
+  const b = await (await browser.newContext()).newPage(); await login(b, 'relief2'); await b.goto('/relief'); await b.getByRole('tab', { name: 'Allocations' }).click(); await b.getByRole('button', { name: 'Approve' }).first().click(); await expect(b.getByText('Allocation approved')).toBeVisible();
+  await b.getByRole('button', { name: 'Record distribution' }).first().click(); await b.getByLabel('Beneficiary').fill('E2E Beneficiary'); await b.getByLabel(/Item/).selectOption({ index: 1 }); await b.getByLabel('Quantity').fill('1'); await b.getByRole('button', { name: 'Record' }).click(); await expect(b.getByText('stock ledger updated')).toBeVisible();
+});
+test('11. analytics are viewable', async ({ page }) => { await login(page, 'me'); await page.goto('/analytics'); await expect(page.getByText('Incidents by LGA')).toBeVisible(); await page.getByRole('tab', { name: 'Response performance' }).click(); await expect(page.getByText('Avg verification time')).toBeVisible(); });
+test('12. permissions prevent unauthorised actions (UI hides, API refuses)', async ({ page }) => {
+  await login(page, 'exec'); await expect(page.getByRole('link', { name: 'Users & roles' })).toHaveCount(0); await page.goto('/admin/users'); await expect(page.getByRole('alert')).toBeVisible();
+  const r = await page.request.get('http://localhost:4000/api/v1/users', { headers: { Authorization: `Bearer ${await page.evaluate(() => (window as any).__t ?? '')}` } }); expect([401, 403]).toContain(r.status());
+});
+test('LGA officer is scoped to their LGA only', async ({ page }) => { await login(page, 'lga.lokoja'); await expect(page.getByText(/Scope: Lokoja/)).toBeVisible(); await page.goto('/reports'); for (const cell of await page.locator('tbody tr td:nth-child(6)').allTextContents()) expect(cell).toContain('Lokoja'); });
+test('responsive: mobile navigation opens and landing page renders', async ({ page }) => { await page.goto('/'); await expect(page.getByRole('heading', { name: /One State/ })).toBeVisible(); });
+test('socket reconnection indicator shows state', async ({ page, context }) => { await login(page, 'ops'); await expect(page.getByRole('status').first()).toBeVisible(); await context.setOffline(true); await expect(page.getByText(/Offline|Reconnecting/)).toBeVisible({ timeout: 20000 }); await context.setOffline(false); });

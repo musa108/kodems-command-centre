@@ -1,0 +1,992 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────── Enums ─────────
+enum Severity {
+  LOW
+  MODERATE
+  HIGH
+  CRITICAL
+}
+enum ReportStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  VERIFIED
+  DUPLICATE
+  REJECTED
+}
+enum IncidentStatus {
+  OPEN
+  ASSESSMENT
+  RESPONSE_ACTIVE
+  RECOVERY
+  RESOLVED
+  CLOSED
+}
+enum TeamStatus {
+  AVAILABLE
+  DEPLOYED
+  UNAVAILABLE
+  MAINTENANCE
+}
+enum DeploymentStatus {
+  ASSIGNED
+  ACCEPTED
+  EN_ROUTE
+  ON_SITE
+  COMPLETED
+  CANCELLED
+  REASSIGNED
+}
+enum DamageLevel {
+  NONE
+  MINOR
+  MODERATE
+  SEVERE
+  DESTROYED
+}
+enum DisplacementStatus {
+  NOT_DISPLACED
+  DISPLACED
+  RETURNED
+  RESETTLED
+}
+enum AllocationStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  FULFILLED
+  CANCELLED
+}
+enum InventoryTxType {
+  RECEIPT
+  DONATION
+  PROCUREMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  DISTRIBUTION
+  DAMAGED
+  EXPIRED
+  ADJUSTMENT
+}
+enum ShelterStatus {
+  ACTIVE
+  FULL
+  TEMPORARILY_UNAVAILABLE
+  CLOSED
+}
+enum AlertStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PUBLISHED
+  EXPIRED
+  CANCELLED
+}
+enum WarehouseStatus {
+  OPERATIONAL
+  LIMITED
+  CLOSED
+}
+enum CategoryKind {
+  INCIDENT
+  TEAM
+  RELIEF
+  SHELTER
+}
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  SMS
+  EMAIL
+}
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+  NOT_CONFIGURED
+}
+enum UpdateType {
+  NOTE
+  UPDATE
+  DECISION
+  SEVERITY_CHANGE
+  OWNER_CHANGE
+  STATUS_CHANGE
+  REPORT_LINKED
+  REOPEN
+  RESOLUTION
+}
+
+// ───────── Identity & access ─────────
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  phone        String?
+  passwordHash String
+  isActive     Boolean  @default(true)
+  mfaEnabled   Boolean  @default(false)
+  mfaSecret    String?
+  failedLogins Int      @default(0)
+  lockedUntil  DateTime?
+  lastLoginAt  DateTime?
+  isDemo       Boolean  @default(false)
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  roles         UserRole[]
+  scopes        UserScope[]
+  sessions      Session[]
+  notifications Notification[]
+  prefs         NotificationPreference[]
+  resetTokens   PasswordResetToken[]
+  @@map("users")
+}
+
+model Role {
+  id            String @id @default(uuid()) @db.Uuid
+  key           String @unique
+  name          String
+  description   String?
+  isSystem      Boolean @default(true)
+  scopeRequired Boolean @default(false) // LGA-scoped roles see nothing until scopes are assigned
+  mfaRequired   Boolean @default(false)
+  users         UserRole[]
+  permissions   RolePermission[]
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(uuid()) @db.Uuid
+  key         String @unique
+  description String?
+  roles       RolePermission[]
+  @@map("permissions")
+}
+
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+  role   Role   @relation(fields: [roleId], references: [id])
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserScope {
+  userId String @db.Uuid
+  lgaId  String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+  lga    Lga    @relation(fields: [lgaId], references: [id])
+  @@id([userId, lgaId])
+  @@map("user_scopes")
+}
+
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  refreshHash String    @unique
+  userAgent   String?
+  ip          String?
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id])
+  @@index([userId])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id])
+  @@map("password_reset_tokens")
+}
+
+// ───────── Geography ─────────
+model Lga {
+  id        String @id @default(uuid()) @db.Uuid
+  name      String @unique
+  code      String @unique
+  source    String? // provenance of the name/code, e.g. "verified: INEC PU directory 2015 + multiple public lists"
+  wards     Ward[]
+  communities Community[]
+  scopes    UserScope[]
+  reports   IncidentReport[]
+  incidents Incident[]
+  teams     ResponseTeam[]
+  households AffectedHousehold[]
+  warehouses Warehouse[]
+  shelters  Shelter[]
+  @@map("lgas")
+}
+
+model Ward {
+  id     String @id @default(uuid()) @db.Uuid
+  lgaId  String @db.Uuid
+  name   String
+  code   String?
+  lga    Lga    @relation(fields: [lgaId], references: [id])
+  communities Community[]
+  @@unique([lgaId, name])
+  @@map("wards")
+}
+
+model Community {
+  id     String  @id @default(uuid()) @db.Uuid
+  lgaId  String  @db.Uuid
+  wardId String? @db.Uuid
+  name   String
+  lat    Float?
+  lng    Float?
+  lga    Lga     @relation(fields: [lgaId], references: [id])
+  ward   Ward?   @relation(fields: [wardId], references: [id])
+  @@index([lgaId])
+  @@map("communities")
+}
+
+/// Geometry lives in a PostGIS column (geom) added by raw-SQL migration; Prisma does not model it.
+model GeographicBoundary {
+  id            String   @id @default(uuid()) @db.Uuid
+  kind          String   // LGA | WARD | OVERLAY
+  refId         String?  @db.Uuid
+  name          String
+  source        String   // dataset provenance — mandatory
+  isPlaceholder Boolean  @default(false)
+  importedAt    DateTime @default(now())
+  @@index([kind, refId])
+  @@map("geographic_boundaries")
+}
+
+model RefCategory {
+  id     String       @id @default(uuid()) @db.Uuid
+  kind   CategoryKind
+  key    String
+  label  String
+  active Boolean      @default(true)
+  reports   IncidentReport[]
+  incidents Incident[]
+  teams     ResponseTeam[]
+  items     ReliefItem[]
+  alerts    PublicAlert[]
+  @@unique([kind, key])
+  @@map("ref_categories")
+}
+
+// ───────── Reports ─────────
+model IncidentReport {
+  id            String       @id @default(uuid()) @db.Uuid
+  ref           String       @unique
+  categoryId    String       @db.Uuid
+  description   String
+  reporterName  String?
+  reporterPhone String?
+  incidentAt    DateTime
+  submittedAt   DateTime     @default(now())
+  lat           Float
+  lng           Float
+  lgaId         String       @db.Uuid
+  ward          String?
+  community     String?
+  address       String?
+  estAffected   Int?
+  immediateNeeds String?
+  suggestedSeverity Severity @default(MODERATE)
+  status        ReportStatus @default(SUBMITTED)
+  assignedOfficerId String?  @db.Uuid
+  duplicateOfId String?      @db.Uuid
+  rejectionReason String?
+  verifiedAt    DateTime?
+  idempotencyKey String?     @unique
+  isDemo        Boolean      @default(false)
+  version       Int          @default(1)
+  updatedAt     DateTime     @updatedAt
+
+  category  RefCategory @relation(fields: [categoryId], references: [id])
+  lga       Lga         @relation(fields: [lgaId], references: [id])
+  media     ReportMedia[]
+  notes     ReportNote[]
+  history   ReportStatusHistory[]
+  links     IncidentReportLink[]
+  @@index([status, submittedAt])
+  @@index([lgaId])
+  @@map("incident_reports")
+}
+
+model ReportMedia {
+  id       String @id @default(uuid()) @db.Uuid
+  reportId String @db.Uuid
+  storageKey String
+  mime     String
+  size     Int
+  createdAt DateTime @default(now())
+  report   IncidentReport @relation(fields: [reportId], references: [id])
+  @@map("report_media")
+}
+
+model ReportNote {
+  id       String @id @default(uuid()) @db.Uuid
+  reportId String @db.Uuid
+  authorId String @db.Uuid
+  body     String
+  createdAt DateTime @default(now())
+  report   IncidentReport @relation(fields: [reportId], references: [id])
+  @@map("report_notes")
+}
+
+model ReportStatusHistory {
+  id       String @id @default(uuid()) @db.Uuid
+  reportId String @db.Uuid
+  from     ReportStatus?
+  to       ReportStatus
+  actorId  String? @db.Uuid
+  reason   String?
+  at       DateTime @default(now())
+  report   IncidentReport @relation(fields: [reportId], references: [id])
+  @@index([reportId])
+  @@map("report_status_history")
+}
+
+// ───────── Incidents ─────────
+model Incident {
+  id            String         @id @default(uuid()) @db.Uuid
+  ref           String         @unique
+  title         String
+  description   String
+  categoryId    String         @db.Uuid
+  severity      Severity
+  status        IncidentStatus @default(OPEN)
+  lat           Float
+  lng           Float
+  lgaId         String         @db.Uuid
+  ward          String?
+  community     String?
+  address       String?
+  ownerId       String?        @db.Uuid
+  coordinatorId String?        @db.Uuid
+  estAffected   Int?
+  verifiedAffected Int?
+  resolutionSummary String?
+  createdById   String         @db.Uuid
+  createdAt     DateTime       @default(now())
+  resolvedAt    DateTime?
+  closedAt      DateTime?
+  isDemo        Boolean        @default(false)
+  version       Int            @default(1)
+  updatedAt     DateTime       @updatedAt
+
+  category  RefCategory @relation(fields: [categoryId], references: [id])
+  lga       Lga         @relation(fields: [lgaId], references: [id])
+  reports   IncidentReportLink[]
+  updates   IncidentUpdate[]
+  media     IncidentMedia[]
+  history   IncidentStatusHistory[]
+  assignments IncidentAssignment[]
+  deployments Deployment[]
+  households AffectedHousehold[]
+  allocations ReliefAllocation[]
+  damage    DamageAssessment[]
+  @@index([status, severity])
+  @@index([lgaId])
+  @@map("incidents")
+}
+
+model IncidentReportLink {
+  incidentId String @db.Uuid
+  reportId   String @db.Uuid
+  linkedAt   DateTime @default(now())
+  linkedById String @db.Uuid
+  incident   Incident       @relation(fields: [incidentId], references: [id])
+  report     IncidentReport @relation(fields: [reportId], references: [id])
+  @@id([incidentId, reportId])
+  @@map("incident_report_links")
+}
+
+model IncidentUpdate {
+  id         String     @id @default(uuid()) @db.Uuid
+  incidentId String     @db.Uuid
+  type       UpdateType
+  body       String
+  meta       Json?
+  authorId   String     @db.Uuid
+  at         DateTime   @default(now())
+  incident   Incident   @relation(fields: [incidentId], references: [id])
+  @@index([incidentId, at])
+  @@map("incident_updates")
+}
+
+model IncidentMedia {
+  id         String @id @default(uuid()) @db.Uuid
+  incidentId String @db.Uuid
+  storageKey String
+  mime       String
+  size       Int
+  uploadedById String @db.Uuid
+  createdAt  DateTime @default(now())
+  incident   Incident @relation(fields: [incidentId], references: [id])
+  @@map("incident_media")
+}
+
+model IncidentStatusHistory {
+  id         String          @id @default(uuid()) @db.Uuid
+  incidentId String          @db.Uuid
+  from       IncidentStatus?
+  to         IncidentStatus
+  actorId    String?         @db.Uuid
+  reason     String?
+  at         DateTime        @default(now())
+  incident   Incident        @relation(fields: [incidentId], references: [id])
+  @@index([incidentId])
+  @@map("incident_status_history")
+}
+
+model IncidentAssignment {
+  id         String   @id @default(uuid()) @db.Uuid
+  incidentId String   @db.Uuid
+  role       String   // OWNER | COORDINATOR
+  userId     String?  @db.Uuid
+  assignedById String @db.Uuid
+  at         DateTime @default(now())
+  incident   Incident @relation(fields: [incidentId], references: [id])
+  @@index([incidentId])
+  @@map("incident_assignments")
+}
+
+// ───────── Response operations ─────────
+model ResponseTeam {
+  id          String     @id @default(uuid()) @db.Uuid
+  code        String     @unique
+  name        String
+  categoryId  String     @db.Uuid
+  agency      String
+  lgaId       String     @db.Uuid
+  baseLat     Float?
+  baseLng     Float?
+  contact     String?
+  status      TeamStatus @default(AVAILABLE)
+  lastLat     Float?
+  lastLng     Float?
+  lastLocationAt DateTime?
+  isDemo      Boolean    @default(false)
+  version     Int        @default(1)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  category     RefCategory @relation(fields: [categoryId], references: [id])
+  lga          Lga         @relation(fields: [lgaId], references: [id])
+  members      TeamMember[]
+  capabilities TeamCapability[]
+  equipment    TeamEquipment[]
+  vehicles     Vehicle[]
+  deployments  Deployment[]
+  @@index([status])
+  @@map("response_teams")
+}
+
+model TeamMember {
+  id       String  @id @default(uuid()) @db.Uuid
+  teamId   String  @db.Uuid
+  name     String
+  phone    String?
+  role     String?
+  isLeader Boolean @default(false)
+  active   Boolean @default(true)
+  team     ResponseTeam @relation(fields: [teamId], references: [id])
+  @@index([teamId])
+  @@map("team_members")
+}
+
+model TeamCapability {
+  id     String @id @default(uuid()) @db.Uuid
+  teamId String @db.Uuid
+  name   String
+  team   ResponseTeam @relation(fields: [teamId], references: [id])
+  @@unique([teamId, name])
+  @@map("team_capabilities")
+}
+
+model TeamEquipment {
+  id        String @id @default(uuid()) @db.Uuid
+  teamId    String @db.Uuid
+  name      String
+  quantity  Int    @default(1)
+  condition String?
+  team      ResponseTeam @relation(fields: [teamId], references: [id])
+  @@map("team_equipment")
+}
+
+model Vehicle {
+  id     String @id @default(uuid()) @db.Uuid
+  teamId String @db.Uuid
+  plate  String @unique
+  type   String
+  status String @default("OPERATIONAL")
+  team   ResponseTeam @relation(fields: [teamId], references: [id])
+  @@map("vehicles")
+}
+
+model Deployment {
+  id          String           @id @default(uuid()) @db.Uuid
+  ref         String           @unique
+  incidentId  String           @db.Uuid
+  teamId      String           @db.Uuid
+  assignedById String          @db.Uuid
+  destination String
+  priority    Severity         @default(MODERATE)
+  instructions String?
+  requiredResources String?
+  status      DeploymentStatus @default(ASSIGNED)
+  assignedAt  DateTime         @default(now())
+  acceptedAt  DateTime?
+  departedAt  DateTime?
+  arrivedAt   DateTime?
+  completedAt DateTime?
+  cancelReason String?
+  reassignedToId String?       @db.Uuid
+  completionReport String?
+  isDemo      Boolean          @default(false)
+  version     Int              @default(1)
+  updatedAt   DateTime         @updatedAt
+
+  incident Incident     @relation(fields: [incidentId], references: [id])
+  team     ResponseTeam @relation(fields: [teamId], references: [id])
+  updates  DeploymentUpdate[]
+  history  DeploymentStatusHistory[]
+  @@index([incidentId])
+  @@index([teamId, status])
+  @@map("deployments")
+}
+
+model DeploymentUpdate {
+  id           String   @id @default(uuid()) @db.Uuid
+  deploymentId String   @db.Uuid
+  kind         String   // FIELD_UPDATE | CHALLENGE | RESOURCE_REQUEST | INSTRUCTION | ESCALATION
+  message      String
+  lat          Float?
+  lng          Float?
+  authorId     String   @db.Uuid
+  idempotencyKey String? @unique
+  at           DateTime @default(now())
+  deployment   Deployment @relation(fields: [deploymentId], references: [id])
+  @@index([deploymentId, at])
+  @@map("deployment_updates")
+}
+
+model DeploymentStatusHistory {
+  id           String           @id @default(uuid()) @db.Uuid
+  deploymentId String           @db.Uuid
+  from         DeploymentStatus?
+  to           DeploymentStatus
+  actorId      String?          @db.Uuid
+  reason       String?
+  at           DateTime         @default(now())
+  deployment   Deployment       @relation(fields: [deploymentId], references: [id])
+  @@index([deploymentId])
+  @@map("deployment_status_history")
+}
+
+// ───────── Affected population ─────────
+model AffectedHousehold {
+  id          String             @id @default(uuid()) @db.Uuid
+  ref         String             @unique
+  headName    String
+  incidentId  String             @db.Uuid
+  lgaId       String             @db.Uuid
+  ward        String?
+  community   String?
+  lat         Float?
+  lng         Float?
+  size        Int
+  damage      DamageLevel        @default(NONE)
+  displacement DisplacementStatus @default(NOT_DISPLACED)
+  immediateNeeds String?
+  source      String             @default("FIELD_REGISTRATION")
+  isDemo      Boolean            @default(false)
+  version     Int                @default(1)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  incident Incident @relation(fields: [incidentId], references: [id])
+  lga      Lga      @relation(fields: [lgaId], references: [id])
+  persons  AffectedPerson[]
+  needs    HouseholdNeed[]
+  damageAssessments DamageAssessment[]
+  beneficiary Beneficiary?
+  @@index([incidentId])
+  @@index([lgaId])
+  @@map("affected_households")
+}
+
+model AffectedPerson {
+  id          String  @id @default(uuid()) @db.Uuid
+  ref         String  @unique
+  householdId String  @db.Uuid
+  name        String?
+  ageBand     String? // 0-4, 5-17, 18-59, 60+
+  sex         String?
+  relationship String?
+  displacement DisplacementStatus @default(NOT_DISPLACED)
+  assistanceNeeds String?
+  registeredAt DateTime @default(now())
+  household   AffectedHousehold @relation(fields: [householdId], references: [id])
+  shelterRegs ShelterRegistration[]
+  @@index([householdId])
+  @@map("affected_persons")
+}
+
+model HouseholdNeed {
+  id          String @id @default(uuid()) @db.Uuid
+  householdId String @db.Uuid
+  need        String
+  household   AffectedHousehold @relation(fields: [householdId], references: [id])
+  @@map("household_needs")
+}
+
+model DamageAssessment {
+  id          String      @id @default(uuid()) @db.Uuid
+  incidentId  String      @db.Uuid
+  householdId String?     @db.Uuid
+  level       DamageLevel
+  description String?
+  assessedById String     @db.Uuid
+  at          DateTime    @default(now())
+  incident    Incident    @relation(fields: [incidentId], references: [id])
+  household   AffectedHousehold? @relation(fields: [householdId], references: [id])
+  @@map("damage_assessments")
+}
+
+// ───────── Relief ─────────
+model ReliefItem {
+  id         String  @id @default(uuid()) @db.Uuid
+  sku        String  @unique
+  name       String
+  categoryId String  @db.Uuid
+  unit       String
+  active     Boolean @default(true)
+  category   RefCategory @relation(fields: [categoryId], references: [id])
+  transactions InventoryTransaction[]
+  allocationItems AllocationItem[]
+  distributionItems DistributionItem[]
+  @@map("relief_items")
+}
+
+model Warehouse {
+  id        String          @id @default(uuid()) @db.Uuid
+  code      String          @unique
+  name      String
+  lgaId     String          @db.Uuid
+  lat       Float?
+  lng       Float?
+  contactPerson String?
+  contactPhone  String?
+  capacity  String?
+  status    WarehouseStatus @default(OPERATIONAL)
+  isDemo    Boolean         @default(false)
+  lga       Lga             @relation(fields: [lgaId], references: [id])
+  transactions InventoryTransaction[]
+  allocations ReliefAllocation[]
+  @@map("warehouses")
+}
+
+/// APPEND-ONLY. UPDATE and DELETE are rejected by a database trigger. Balance = SUM(delta).
+model InventoryTransaction {
+  id          String          @id @default(uuid()) @db.Uuid
+  warehouseId String          @db.Uuid
+  itemId      String          @db.Uuid
+  type        InventoryTxType
+  delta       Int             // signed quantity
+  reference   String?
+  reason      String?
+  allocationId String?        @db.Uuid
+  distributionId String?      @db.Uuid
+  transferGroup String?       @db.Uuid
+  idempotencyKey String?      @unique
+  createdById String          @db.Uuid
+  createdAt   DateTime        @default(now())
+  warehouse   Warehouse       @relation(fields: [warehouseId], references: [id])
+  item        ReliefItem      @relation(fields: [itemId], references: [id])
+  @@index([warehouseId, itemId])
+  @@map("inventory_transactions")
+}
+
+model ReliefAllocation {
+  id          String           @id @default(uuid()) @db.Uuid
+  ref         String           @unique
+  incidentId  String           @db.Uuid
+  warehouseId String           @db.Uuid
+  targetArea  String
+  status      AllocationStatus @default(DRAFT)
+  requestedById String         @db.Uuid
+  approvedById  String?        @db.Uuid
+  decisionNote  String?
+  approvedAt  DateTime?
+  isDemo      Boolean          @default(false)
+  version     Int              @default(1)
+  createdAt   DateTime         @default(now())
+  incident    Incident         @relation(fields: [incidentId], references: [id])
+  warehouse   Warehouse        @relation(fields: [warehouseId], references: [id])
+  items       AllocationItem[]
+  distributions ReliefDistribution[]
+  @@index([status])
+  @@map("relief_allocations")
+}
+
+model AllocationItem {
+  id           String @id @default(uuid()) @db.Uuid
+  allocationId String @db.Uuid
+  itemId       String @db.Uuid
+  quantity     Int
+  allocation   ReliefAllocation @relation(fields: [allocationId], references: [id])
+  item         ReliefItem       @relation(fields: [itemId], references: [id])
+  @@unique([allocationId, itemId])
+  @@map("allocation_items")
+}
+
+/// A beneficiary is NOT automatically an affected person; optional link to a household.
+model Beneficiary {
+  id          String  @id @default(uuid()) @db.Uuid
+  ref         String  @unique
+  name        String
+  phone       String?
+  householdId String? @unique @db.Uuid
+  household   AffectedHousehold? @relation(fields: [householdId], references: [id])
+  distributions ReliefDistribution[]
+  createdAt   DateTime @default(now())
+  @@map("beneficiaries")
+}
+
+model ReliefDistribution {
+  id            String   @id @default(uuid()) @db.Uuid
+  ref           String   @unique
+  allocationId  String   @db.Uuid
+  beneficiaryId String   @db.Uuid
+  distributedById String @db.Uuid
+  distributedAt DateTime @default(now())
+  acknowledgement String?
+  evidenceKey   String?
+  idempotencyKey String? @unique
+  allocation    ReliefAllocation @relation(fields: [allocationId], references: [id])
+  beneficiary   Beneficiary      @relation(fields: [beneficiaryId], references: [id])
+  items         DistributionItem[]
+  @@index([allocationId])
+  @@map("relief_distributions")
+}
+
+model DistributionItem {
+  id             String @id @default(uuid()) @db.Uuid
+  distributionId String @db.Uuid
+  itemId         String @db.Uuid
+  quantity       Int
+  distribution   ReliefDistribution @relation(fields: [distributionId], references: [id])
+  item           ReliefItem         @relation(fields: [itemId], references: [id])
+  @@map("distribution_items")
+}
+
+// ───────── Shelters ─────────
+model Shelter {
+  id         String        @id @default(uuid()) @db.Uuid
+  code       String        @unique
+  name       String
+  lgaId      String        @db.Uuid
+  ward       String?
+  lat        Float?
+  lng        Float?
+  capacity   Int
+  facilities String[]
+  accessibility String?
+  contactPerson String?
+  contactPhone  String?
+  shortages  String?
+  status     ShelterStatus @default(ACTIVE)
+  isDemo     Boolean       @default(false)
+  version    Int           @default(1)
+  updatedAt  DateTime      @updatedAt
+  lga        Lga           @relation(fields: [lgaId], references: [id])
+  registrations ShelterRegistration[]
+  occupancy  ShelterOccupancyHistory[]
+  @@map("shelters")
+}
+
+model ShelterRegistration {
+  id         String   @id @default(uuid()) @db.Uuid
+  shelterId  String   @db.Uuid
+  personId   String?  @db.Uuid
+  name       String
+  ageBand    String?
+  incidentId String?  @db.Uuid
+  checkInAt  DateTime @default(now())
+  checkOutAt DateTime?
+  checkedInById String @db.Uuid
+  shelter    Shelter  @relation(fields: [shelterId], references: [id])
+  person     AffectedPerson? @relation(fields: [personId], references: [id])
+  @@index([shelterId, checkOutAt])
+  @@map("shelter_registrations")
+}
+
+model ShelterOccupancyHistory {
+  id        String   @id @default(uuid()) @db.Uuid
+  shelterId String   @db.Uuid
+  occupancy Int
+  capacity  Int
+  reason    String
+  at        DateTime @default(now())
+  shelter   Shelter  @relation(fields: [shelterId], references: [id])
+  @@index([shelterId, at])
+  @@map("shelter_occupancy_history")
+}
+
+// ───────── Notifications & alerts ─────────
+model Notification {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  type       String
+  title      String
+  body       String
+  entityType String?
+  entityId   String?
+  readAt     DateTime?
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id])
+  deliveries NotificationDeliveryLog[]
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  userId  String  @db.Uuid
+  type    String
+  channel NotificationChannel
+  enabled Boolean @default(true)
+  user    User    @relation(fields: [userId], references: [id])
+  @@id([userId, type, channel])
+  @@map("notification_preferences")
+}
+
+model PublicAlert {
+  id          String      @id @default(uuid()) @db.Uuid
+  ref         String      @unique
+  title       String
+  message     String
+  categoryId  String      @db.Uuid
+  severity    Severity
+  targetLgaIds String[]   @db.Uuid
+  targetArea  String?
+  status      AlertStatus @default(DRAFT)
+  publishAt   DateTime?
+  expiresAt   DateTime?
+  issuedById  String      @db.Uuid
+  publishedAt DateTime?
+  isDemo      Boolean     @default(false)
+  version     Int         @default(1)
+  createdAt   DateTime    @default(now())
+  category    RefCategory @relation(fields: [categoryId], references: [id])
+  approvals   AlertApproval[]
+  deliveries  NotificationDeliveryLog[]
+  @@map("public_alerts")
+}
+
+model AlertApproval {
+  id         String   @id @default(uuid()) @db.Uuid
+  alertId    String   @db.Uuid
+  approverId String   @db.Uuid
+  decision   String   // APPROVED | REJECTED | SUBMITTED | AMENDED | PUBLISHED | CANCELLED
+  comment    String?
+  at         DateTime @default(now())
+  alert      PublicAlert @relation(fields: [alertId], references: [id])
+  @@index([alertId])
+  @@map("alert_approvals")
+}
+
+model NotificationDeliveryLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  notificationId String?  @db.Uuid
+  alertId        String?  @db.Uuid
+  channel        NotificationChannel
+  status         DeliveryStatus
+  provider       String?
+  error          String?
+  at             DateTime @default(now())
+  notification   Notification? @relation(fields: [notificationId], references: [id])
+  alert          PublicAlert?  @relation(fields: [alertId], references: [id])
+  @@map("notification_delivery_logs")
+}
+
+// ───────── Governance ─────────
+/// IMMUTABLE. UPDATE/DELETE rejected by trigger.
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  userId     String?  @db.Uuid
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  reason     String?
+  ip         String?
+  userAgent  String?
+  at         DateTime @default(now())
+  @@index([entityType, entityId])
+  @@index([userId, at])
+  @@index([at])
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  key   String @id
+  value Json
+  updatedAt DateTime @updatedAt
+  @@map("system_settings")
+}
+
+model IntegrationConfig {
+  key     String  @id // sms, email, push, storage, tiles
+  enabled Boolean @default(false)
+  status  String  @default("NOT_CONFIGURED")
+  config  Json?
+  updatedAt DateTime @updatedAt
+  @@map("integration_configs")
+}
+
+/// Transactional outbox: written in the same DB transaction as the state change.
+model OutboxEvent {
+  id          BigInt    @id @default(autoincrement())
+  type        String
+  payload     Json
+  scopeLgaId  String?   @db.Uuid
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+  @@index([publishedAt, id])
+  @@map("outbox_events")
+}
+
+model IdempotencyRecord {
+  key       String   @id
+  userId    String   @db.Uuid
+  route     String
+  response  Json
+  createdAt DateTime @default(now())
+  @@map("idempotency_records")
+}
